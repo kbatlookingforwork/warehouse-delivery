@@ -10,41 +10,57 @@ def get_db_connection():
         # Try using the complete DATABASE_URL if available
         database_url = os.getenv("DATABASE_URL")
         if database_url:
-            conn = psycopg2.connect(database_url)
+            # Modify the connection parameters to ensure proper connection
+            conn = psycopg2.connect(
+                database_url,
+                # Set a timeout to avoid long connection attempts
+                connect_timeout=3
+            )
             return conn
         
-        # Otherwise use individual connection parameters
+        # Otherwise use individual connection parameters with explicit host
         conn = psycopg2.connect(
-            host=os.getenv("PGHOST", "localhost"),
+            host=os.getenv("PGHOST", "127.0.0.1"),  # Use IP directly instead of 'localhost'
             database=os.getenv("PGDATABASE", "postgres"),
             user=os.getenv("PGUSER", "postgres"),
             password=os.getenv("PGPASSWORD", ""),
-            port=os.getenv("PGPORT", "5432")
+            port=os.getenv("PGPORT", "5432"),
+            # Set a timeout to avoid long connection attempts
+            connect_timeout=3
         )
         return conn
     except Exception as e:
+        # Don't raise the exception, this will be handled by the caller
         st.error(f"Database connection error: {e}")
-        raise
+        return None
 
 def execute_query(query, params=None):
     """
     Execute a query and return the results as a pandas DataFrame
     """
     import pandas as pd
+    from sample_data import get_sample_data
     
     conn = get_db_connection()
+    
+    # If connection failed, return None to signal caller to use sample data
+    if conn is None:
+        return None
+    
     try:
         df = pd.read_sql(query, conn, params=params)
         return df
     except Exception as e:
         st.error(f"Query execution error: {e}")
-        raise
+        return None
     finally:
-        conn.close()
+        if conn is not None:
+            conn.close()
 
 def get_warehouse_data(start_date, end_date):
     """
     Get warehouse data for the specified date range
+    If database connection fails, returns None so caller can use sample data
     """
     query = """
     SELECT 
@@ -75,4 +91,12 @@ def get_warehouse_data(start_date, end_date):
         o.order_date BETWEEN %s AND %s
     """
     
-    return execute_query(query, params=[start_date, end_date])
+    result = execute_query(query, params=[start_date, end_date])
+    
+    # If database query failed, we'll return None and the app will use sample data
+    if result is None:
+        st.warning("Database connection failed. Using sample data instead.")
+        from sample_data import get_sample_data
+        return get_sample_data()
+    
+    return result
